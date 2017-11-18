@@ -148,6 +148,7 @@ Store.register({Curve: CurvePlot,
 
                 # Graph Elements
                 Graph: GraphPlot,
+                Chord: GraphPlot,
                 Nodes: PointPlot,
                 EdgePaths: PathPlot,
 
@@ -263,6 +264,9 @@ options.TimeSeries = Options('style', color=Cycle())
 # Graphs
 options.Graph = Options('style', node_edgecolors='black', node_facecolors=Cycle(),
                         edge_color='black', node_size=20)
+options.Chord = Options('style', node_edgecolors='black', node_facecolors=Cycle(),
+                        edge_color='black', node_size=10, edge_linewidth=1)
+options.Chord = Options('plot', xaxis=None, yaxis=None)
 options.Nodes = Options('style', edgecolors='black', facecolors=Cycle(),
                         marker='o', s=20**2)
 options.EdgePaths = Options('style', color='black')

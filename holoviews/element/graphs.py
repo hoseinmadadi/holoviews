@@ -416,3 +416,30 @@ class EdgePaths(Path):
 
     group = param.String(default='EdgePaths', constant=True)
 
+
+
+class Chord(Graph):
+    """
+    Chord is a special type of Graph which lays out the nodes on a
+    circle and connects the nodes using quadratic splines.
+    """
+
+    group = param.String(default='Chord')
+
+    def __init__(self, data, kdims=None, vdims=None, **params):
+        super(Chord, self).__init__(data, kdims, vdims, **params)
+        self._edgepaths = self.edgepaths
+
+    @property
+    def edgepaths(self):
+        """
+        Returns the fixed EdgePaths or computes direct connections
+        between supplied nodes.
+        """
+        if self._edgepaths:
+            return self._edgepaths
+        if pd is None:
+            paths = connect_edges(self, 'bezier')
+        else:
+            paths = connect_edges_pd(self, 'bezier')
+        return EdgePaths(paths, kdims=self.nodes.kdims[:2])

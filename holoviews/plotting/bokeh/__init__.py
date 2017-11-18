@@ -13,7 +13,8 @@ from ...element import (Curve, Points, Scatter, Image, Raster, Path,
                         Box, Bounds, Ellipse, Polygons, BoxWhisker, Arrow,
                         ErrorBars, Text, HLine, VLine, Spline, Spikes,
                         Table, ItemTable, Area, HSV, QuadMesh, VectorField,
-                        Graph, Nodes, EdgePaths, Distribution, Bivariate)
+                        Graph, Nodes, EdgePaths, Distribution, Bivariate,
+                        Chord)
 from ...core.options import Options, Cycle, Palette
 from ...core.util import VersionError
 
@@ -95,6 +96,7 @@ associations = {Overlay: OverlayPlot,
 
                 # Graph Elements
                 Graph: GraphPlot,
+                Chord: GraphPlot,
                 Nodes: NodePlot,
                 EdgePaths: PathPlot,
 
@@ -198,6 +200,19 @@ options.Graph = Options('style', node_size=20, node_fill_color=Cycle(),
                         edge_nonselection_line_color='black',
                         edge_hover_line_color='indianred',
                         edge_selection_line_color='limegreen')
+options.Chord = Options('style', node_size=10, node_fill_color=Cycle(),
+                        node_line_color='black',
+                        node_selection_fill_color='limegreen',
+                        node_nonselection_fill_color=Cycle(),
+                        node_hover_line_color='black',
+                        node_hover_fill_color='indianred',
+                        node_nonselection_alpha=0.2,
+                        edge_nonselection_alpha=0.2,
+                        edge_line_color='black', edge_line_width=1,
+                        edge_nonselection_line_color='black',
+                        edge_hover_line_color='indianred',
+                        edge_selection_line_color='limegreen')
+options.Chord = Options('plot', xaxis=None, yaxis=None)
 options.Nodes = Options('style', line_color='black', color=Cycle(),
                         size=20, nonselection_fill_color=Cycle(),
                         selection_fill_color='limegreen',
