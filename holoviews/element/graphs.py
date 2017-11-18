@@ -41,6 +41,65 @@ def circular_layout(nodes):
     return (x, y, nodes)
 
 
+def bezier(start, end, control=(0, 0), steps=np.linspace(0, 1, 100)):
+    sx, sy = start
+    ex, ey = end
+    cx, cy = control
+    xs = (1-steps)**2*sx + 2*(1-steps)*steps*cx+steps**2*ex
+    ys = (1-steps)**2*sy + 2*(1-steps)*steps*cy+steps**2*ey
+    return np.column_stack([xs, ys])
+
+
+def direct(start, end):
+    sx, sy = start
+    ex, ey = end
+    return np.array([(sx, sy), (ex, ey)])
+
+
+def connect_edges_pd(graph, edge_type='direct'):
+    edges = graph.dframe()
+    edges.index.name = 'graph_edge_index'
+    edges = edges.reset_index()
+    nodes = graph.nodes.dframe()
+    src, tgt = graph.kdims
+    x, y, idx = graph.nodes.kdims[:3]
+
+    df = pd.merge(edges, nodes, left_on=[src.name], right_on=[idx.name])
+    df = df.rename(columns={x.name: 'src_x', y.name: 'src_y'})
+
+    df = pd.merge(df, nodes, left_on=[tgt.name], right_on=[idx.name])
+    df = df.rename(columns={x.name: 'dst_x', y.name: 'dst_y'})
+    df = df.sort_values('graph_edge_index')
+
+    edge_segments = []
+    for i, edge in df.iterrows():
+        start = edge['src_x'], edge['src_y']
+        end = edge['dst_x'], edge['dst_y']
+        if edge_type == 'direct':
+            segment = direct(start, end)
+        elif edge_type == 'bezier':
+            segment = bezier(start, end)
+        edge_segments.append(segment)
+    return edge_segments
+
+
+def connect_edges(graph, edge_type='direct'):
+    paths = []
+    for start, end in graph.array(self.kdims):
+        start_ds = graph.nodes[:, :, start]
+        end_ds = graph.nodes[:, :, end]
+        if not len(start_ds) or not len(end_ds):
+            raise ValueError('Could not find node positions for all edges')
+        start = start_ds.array(start_ds.kdims[:2]).T
+        end = end_ds.array(end_ds.kdims[:2]).T
+        if edge_type == 'direct':
+            segment = direct(start, end)
+        elif edge_type == 'bezier':
+            segment = bezier(start, end)
+        paths.append(segment)
+    return paths
+
+
 class layout_nodes(Operation):
     """
     Accepts a Graph and lays out the corresponding nodes with the
@@ -125,10 +184,17 @@ class Graph(Dataset, Element2D):
         super(Graph, self).__init__(edges, kdims=kdims, vdims=vdims, **params)
         if self._nodes is None and node_info:
             nodes = self.nodes.clone(datatype=['pandas', 'dictionary'])
-            for d in node_info.dimensions():
-                nodes = nodes.add_dimension(d, len(nodes.vdims),
-                                            node_info.dimension_values(d),
-                                            vdim=True)
+            if pd is None:
+                for d in node_info.dimensions('value'):
+                    nodes = nodes.add_dimension(d, len(nodes.vdims),
+                                                node_info.dimension_values(d),
+                                                vdim=True)
+            else:
+                node_info_df = node_info.dframe()
+                node_df = nodes.dframe()
+                idx = node_info.kdims[0].name
+                node_df = pd.merge(node_df, node_info_df, left_on='index', right_on=idx)
+                nodes = nodes.clone(node_df, vdims=node_info.vdims)
             self._nodes = nodes
         self._validate()
         self.redim = redim_graph(self, mode='dataset')
@@ -300,15 +366,10 @@ class Graph(Dataset, Element2D):
         """
         if self._edgepaths:
             return self._edgepaths
-        paths = []
-        for start, end in self.array(self.kdims):
-            start_ds = self.nodes[:, :, start]
-            end_ds = self.nodes[:, :, end]
-            if not len(start_ds) or not len(end_ds):
-                raise ValueError('Could not find node positions for all edges')
-            sx, sy = start_ds.array(start_ds.kdims[:2]).T
-            ex, ey = end_ds.array(end_ds.kdims[:2]).T
-            paths.append([(sx[0], sy[0]), (ex[0], ey[0])])
+        if pd is None:
+            paths = connect_edges(self)
+        else:
+            paths = connect_edges_pd(self)
         return EdgePaths(paths, kdims=self.nodes.kdims[:2])
 
 
