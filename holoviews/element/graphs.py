@@ -41,12 +41,22 @@ def circular_layout(nodes):
     return (x, y, nodes)
 
 
-def bezier(start, end, control=(0, 0), steps=np.linspace(0, 1, 100)):
+def cubic_bezier(start, end, control=(0, 0), steps=np.linspace(0, 1, 100)):
     sx, sy = start
     ex, ey = end
     cx, cy = control
     xs = (1-steps)**2*sx + 2*(1-steps)*steps*cx+steps**2*ex
     ys = (1-steps)**2*sy + 2*(1-steps)*steps*cy+steps**2*ey
+    return np.column_stack([xs, ys])
+
+
+def quadratic_bezier(start, end, c0=(0, 0), c1=(0, 0), steps=np.linspace(0, 1, 100)):
+    sx, sy = start
+    ex, ey = end
+    cx0, cy0 = c0
+    cx1, cy1 = c1
+    xs = (1-steps)**3*sx + 3*((1-steps)**2)*steps*cx0 + 3*(1-steps)*steps**2*cx1 + steps**3*ex
+    ys = (1-steps)**3*sy + 3*((1-steps)**2)*steps*cy0 + 3*(1-steps)*steps**2*cy1 + steps**3*ey
     return np.column_stack([xs, ys])
 
 
@@ -72,13 +82,14 @@ def connect_edges_pd(graph, edge_type='direct'):
     df = df.sort_values('graph_edge_index')
 
     edge_segments = []
+    N = len(nodes)
     for i, edge in df.iterrows():
         start = edge['src_x'], edge['src_y']
         end = edge['dst_x'], edge['dst_y']
         if edge_type == 'direct':
             segment = direct(start, end)
-        elif edge_type == 'bezier':
-            segment = bezier(start, end)
+        elif edge_type == 'cubic_bezier':
+            segment = cubic_bezier(start, end)
         edge_segments.append(segment)
     return edge_segments
 
@@ -94,10 +105,76 @@ def connect_edges(graph, edge_type='direct'):
         end = end_ds.array(end_ds.kdims[:2]).T
         if edge_type == 'direct':
             segment = direct(start, end)
-        elif edge_type == 'bezier':
-            segment = bezier(start, end)
+        elif edge_type == 'cubic_bezier':
+            segment = cubic_bezier(start, end)
         paths.append(segment)
     return paths
+
+
+def search_indices(values, source):
+    orig_indices = source.argsort()
+    return orig_indices[np.searchsorted(source[orig_indices], values)]
+
+
+def compute_chords(element):
+    source = element.dimension_values(0, expanded=False)
+    target = element.dimension_values(1, expanded=False)
+    nodes = np.unique(np.concatenate([source, target]))
+
+    src, tgt = (element.dimension_values(i) for i in range(2))
+    src_idx = search_indices(src, nodes)
+    tgt_idx = search_indices(tgt, nodes)
+    if element.vdims:
+        values = element.dimension_values(2)
+    else:
+        values = np.ones(len(element))
+
+    matrix = np.zeros((len(nodes), len(nodes)))
+    for s, t, v in zip(src_idx, tgt_idx, values):
+        matrix[s, t] = v
+
+    weights_of_areas = (matrix.sum(axis=0) + matrix.sum(axis=1)) - matrix.diagonal()
+    areas_in_radians = (weights_of_areas / weights_of_areas.sum()) * (2 * np.pi)
+
+    # We add a zero in the begging for the cumulative sum
+    points = np.zeros((areas_in_radians.shape[0] + 1))
+    points[1:] = areas_in_radians
+    points = points.cumsum()
+
+    # Compute edge points
+    xs = np.cos(points)
+    ys = np.sin(points)
+
+    # Compute mid-points
+    midpoints = np.convolve(points, [0.5, 0.5],
+                            mode='valid')
+    mxs = np.cos(midpoints)
+    mys = np.sin(midpoints)
+
+    all_areas = []
+    for i in range(areas_in_radians.shape[0]):
+        n_conn = weights_of_areas[i]
+        p0, p1 = points[i], points[i+1]
+        angles = np.linspace(p0, p1, n_conn)
+        coords = list(zip(np.cos(angles), np.sin(angles)))
+        all_areas.append(coords)
+
+    empty = np.array([[np.NaN, np.NaN]])
+    paths = []
+    for i in range(len(element)):
+        src_area, tgt_area = all_areas[src_idx[i]], all_areas[tgt_idx[i]]
+        subpaths = []
+        for _ in range(int(values[i])):
+            x0, y0 = src_area.pop()
+            x1, y1 = tgt_area.pop()
+            b = quadratic_bezier((x0, y0), (x1, y1), (x0/2., y0/2.),
+                                 (x1/2., y1/2.))
+            subpaths.append(b)
+            subpaths.append(empty)
+        if subpaths:
+            paths.append(np.concatenate(subpaths))
+
+    return (mxs, mys, nodes), paths
 
 
 class layout_nodes(Operation):
@@ -427,19 +504,49 @@ class Chord(Graph):
     group = param.String(default='Chord')
 
     def __init__(self, data, kdims=None, vdims=None, **params):
-        super(Chord, self).__init__(data, kdims, vdims, **params)
-        self._edgepaths = self.edgepaths
+        if isinstance(data, tuple):
+            data = data + (None,)* (2-len(data))
+            edges, nodes = data
+        else:
+            edges, nodes = data, None
+        if nodes is not None:
+            node_info = None
+            if isinstance(nodes, Nodes):
+                pass
+            elif not isinstance(nodes, Dataset) or nodes.ndims == 3:
+                nodes = Nodes(nodes)
+            else:
+                node_info = nodes
+                nodes = None
+        else:
+            node_info = None
+        super(Graph, self).__init__(edges, kdims=kdims, vdims=vdims, **params)
+        nodes, edgepaths = compute_chords(self)
+        self._nodes = Nodes(nodes)
+        self._edgepaths = EdgePaths(edgepaths)
+        if node_info:
+            nodes = self.nodes.clone(datatype=['pandas', 'dictionary'])
+            if pd is None:
+                for d in node_info.dimensions('value'):
+                    nodes = nodes.add_dimension(d, len(nodes.vdims),
+                                                node_info.dimension_values(d),
+                                                vdim=True)
+            else:
+                node_info_df = node_info.dframe()
+                node_df = nodes.dframe()
+                idx = node_info.kdims[0].name
+                node_df = pd.merge(node_df, node_info_df, left_on='index', right_on=idx)
+                nodes = nodes.clone(node_df, vdims=node_info.vdims)
+            self._nodes = nodes
+        self._validate()
+        self.redim = redim_graph(self, mode='dataset')
+
 
     @property
     def edgepaths(self):
-        """
-        Returns the fixed EdgePaths or computes direct connections
-        between supplied nodes.
-        """
-        if self._edgepaths:
-            return self._edgepaths
-        if pd is None:
-            paths = connect_edges(self, 'bezier')
-        else:
-            paths = connect_edges_pd(self, 'bezier')
-        return EdgePaths(paths, kdims=self.nodes.kdims[:2])
+        return self._edgepaths
+
+
+    @property
+    def nodes(self):
+        return self._nodes
