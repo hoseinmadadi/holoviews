@@ -9,14 +9,21 @@ try:
 except:
     pass
 
-from ...core.util import basestring, dimension_sanitizer
+from ...core.util import basestring, dimension_sanitizer, unique_array
+from ...core.options import Cycle
 from .chart import ColorbarPlot, PointPlot
 from .element import CompositeElementPlot, LegendPlot, line_properties, fill_properties
+from ..util import rgb2hex
+from .util import process_cmap
 
 
 class GraphPlot(CompositeElementPlot, ColorbarPlot, LegendPlot):
 
     color_index = param.ClassSelector(default=None, class_=(basestring, int),
+                                      allow_None=True, doc="""
+      Index of the dimension from which the color will the drawn""")
+
+    edge_color_index = param.ClassSelector(default=None, class_=(basestring, int),
                                       allow_None=True, doc="""
       Index of the dimension from which the color will the drawn""")
 
@@ -41,16 +48,14 @@ class GraphPlot(CompositeElementPlot, ColorbarPlot, LegendPlot):
     _style_groups = {'scatter': 'node', 'multi_line': 'edge'}
 
     style_opts = (['edge_'+p for p in line_properties] +\
-                  ['node_'+p for p in fill_properties+line_properties]+['node_size', 'cmap'])
+                  ['node_'+p for p in fill_properties+line_properties]+['node_size', 'cmap', 'edge_cmap'])
 
     def _hover_opts(self, element):
         if self.inspection_policy == 'nodes':
             dims = element.nodes.dimensions()
             dims = [(dims[2].pprint_label, '@{index_hover}')]+dims[3:]
         elif self.inspection_policy == 'edges':
-            kdims = [(kd.pprint_label, '@{%s}' % ref)
-                     for kd, ref in zip(element.kdims, ['start', 'end'])]
-            dims = kdims+element.vdims
+            dims = element.kdims+element.vdims
         else:
             dims = []
         return dims, {}
@@ -73,6 +78,46 @@ class GraphPlot(CompositeElementPlot, ColorbarPlot, LegendPlot):
         xlabel, ylabel = [kd.pprint_label for kd in element.nodes.kdims[:2]]
         return xlabel, ylabel, None
 
+
+    def _get_edge_colors(self, element, ranges, edge_data, edge_mapping, style):
+        cdim = element.get_dimension(self.edge_color_index)
+        if not cdim:
+            return
+        elstyle = self.lookup_options(element, 'style')
+        cycle = elstyle.kwargs.get('edge_color')
+
+        idx = element.get_dimension_index(cdim)
+        field = dimension_sanitizer(cdim.name)
+        cvals = element.dimension_values(cdim)
+        if idx in [0, 1]:
+            factors = element.nodes.dimension_values(2, expanded=False)
+        else:
+            factors = unique_array(cvals)
+
+        colors, cmap = None, style.get('edge_cmap', style.get('cmap'))
+        if factors.dtype.kind != 'f':
+            if factors.dtype.kind == 'i':
+                field += '_str'
+                cvals = [str(f) for f in cvals]
+                factors = (str(f) for f in factors)
+            factors = list(factors)
+            if isinstance(cycle, Cycle):
+                colors = [rgb2hex(cycle.values[i%len(cycle)]) for i in range(len(factors))]
+            else:
+                colors = process_cmap(cmap, len(factors))
+        else:
+            factors = None
+
+        if field not in edge_data:
+            edge_data[field] = cvals
+        edge_style = dict(style, cmap=cmap)
+        mapper = self._get_colormapper(cdim, element, ranges, edge_style,
+                                       factors, colors, 'edge_colormapper')
+        edge_mapping['edge_line_color'] = {'field': field, 'transform': mapper}
+        edge_mapping['edge_nonselection_line_color'] = {'field': field, 'transform': mapper}
+        edge_mapping['edge_selection_line_color'] = {'field': field, 'transform': mapper}
+
+
     def get_data(self, element, ranges, style):
         xidx, yidx = (1, 0) if self.invert_axes else (0, 1)
 
@@ -90,9 +135,14 @@ class GraphPlot(CompositeElementPlot, ColorbarPlot, LegendPlot):
             layout = {z: (y, x) if self.invert_axes else (x, y)
                       for x, y, z in node_positions}
         point_data = {'index': index}
-        cdata, cmapping = self._get_color_data(element.nodes, ranges, style, 'node_fill_color')
+        cycle = self.lookup_options(element, 'style').kwargs.get('node_color')
+        cdata, cmapping = self._get_color_data(
+            element.nodes, ranges, style, name='node_fill_color',
+            cycle=cycle, integers=True
+        )
         point_data.update(cdata)
         point_mapping = cmapping
+        edge_mapping = {}
         if 'node_fill_color' in point_mapping:
             style = {k: v for k, v in style.items() if k not in
                      ['node_fill_color', 'node_nonselection_fill_color']}
@@ -105,6 +155,7 @@ class GraphPlot(CompositeElementPlot, ColorbarPlot, LegendPlot):
             start = np.array([node_indices.get(x, nan_node) for x in start], dtype=np.int32)
             end = np.array([node_indices.get(y, nan_node) for y in end], dtype=np.int32)
         path_data = dict(start=start, end=end)
+        self._get_edge_colors(element, ranges, path_data, edge_mapping, style)
         if element._edgepaths and not self.static_source:
             edges = element._split_edgepaths.split(datatype='array', dimensions=element.edgepaths.kdims)
             if len(edges) == len(start):
@@ -122,11 +173,10 @@ class GraphPlot(CompositeElementPlot, ColorbarPlot, LegendPlot):
                 for d in element.nodes.dimensions()[3:]:
                     point_data[dimension_sanitizer(d.name)] = element.nodes.dimension_values(d)
             elif self.inspection_policy == 'edges':
-                for d in element.vdims:
+                for d in element.dimensions():
                     path_data[dimension_sanitizer(d.name)] = element.dimension_values(d)
-
         data = {'scatter_1': point_data, 'multi_line_1': path_data, 'layout': layout}
-        mapping = {'scatter_1': point_mapping, 'multi_line_1': {}}
+        mapping = {'scatter_1': point_mapping, 'multi_line_1': edge_mapping}
         return data, mapping, style
 
 
