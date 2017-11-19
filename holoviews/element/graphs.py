@@ -34,6 +34,9 @@ class redim_graph(redim):
 
 
 def circular_layout(nodes):
+    """
+    Lay out nodes on a circle and add node index.
+    """
     N = len(nodes)
     circ = np.pi/N*np.arange(N)*2
     x = np.cos(circ)
@@ -42,6 +45,10 @@ def circular_layout(nodes):
 
 
 def cubic_bezier(start, end, control=(0, 0), steps=np.linspace(0, 1, 100)):
+    """
+    Compute cubic bezier spline given start and end coordinate and
+    two control points.
+    """
     sx, sy = start
     ex, ey = end
     cx, cy = control
@@ -50,7 +57,11 @@ def cubic_bezier(start, end, control=(0, 0), steps=np.linspace(0, 1, 100)):
     return np.column_stack([xs, ys])
 
 
-def quadratic_bezier(start, end, c0=(0, 0), c1=(0, 0), steps=np.linspace(0, 1, 100)):
+def quadratic_bezier(start, end, c0=(0, 0), c1=(0, 0), steps=np.linspace(0, 1, 50)):
+    """
+    Compute quadratic bezier spline given start and end coordinate and
+    two control points.
+    """
     sx, sy = start
     ex, ey = end
     cx0, cy0 = c0
@@ -61,12 +72,19 @@ def quadratic_bezier(start, end, c0=(0, 0), c1=(0, 0), steps=np.linspace(0, 1, 1
 
 
 def direct(start, end):
-    sx, sy = start
-    ex, ey = end
-    return np.array([(sx, sy), (ex, ey)])
+    """
+    Directly connect the start and end points of a segment.
+    """
+    return np.array([start, end])
 
 
 def connect_edges_pd(graph, edge_type='direct'):
+    """
+    Given a Graph element containing abstract edges compute edge
+    segments using the supplied edge_type, which may be direct
+    or use cubic_bezier interpolation. This operation depends on
+    pandas and is a lot faster than the pure NumPy equivalent.
+    """
     edges = graph.dframe()
     edges.index.name = 'graph_edge_index'
     edges = edges.reset_index()
@@ -79,7 +97,7 @@ def connect_edges_pd(graph, edge_type='direct'):
 
     df = pd.merge(df, nodes, left_on=[tgt.name], right_on=[idx.name])
     df = df.rename(columns={x.name: 'dst_x', y.name: 'dst_y'})
-    df = df.sort_values('graph_edge_index')
+    df = df.sort_values('graph_edge_index').drop(columns=['graph_edge_index'])
 
     edge_segments = []
     N = len(nodes)
@@ -95,6 +113,13 @@ def connect_edges_pd(graph, edge_type='direct'):
 
 
 def connect_edges(graph, edge_type='direct'):
+    """
+    Given a Graph element containing abstract edges compute edge
+    segments using the supplied edge_type, which may be direct or use
+    cubic_bezier interpolation. This operation just uses internal
+    HoloViews operations and will be a lot slower than the pandas
+    equivalent.
+    """
     paths = []
     for start, end in graph.array(self.kdims):
         start_ds = graph.nodes[:, :, start]
@@ -112,26 +137,48 @@ def connect_edges(graph, edge_type='direct'):
 
 
 def search_indices(values, source):
+    """
+    Given a set of values returns the indices of each of those values
+    in the source array.
+    """
     orig_indices = source.argsort()
     return orig_indices[np.searchsorted(source[orig_indices], values)]
 
 
-def compute_chords(element):
-    source = element.dimension_values(0, expanded=False)
-    target = element.dimension_values(1, expanded=False)
-    nodes = np.unique(np.concatenate([source, target]))
+def compute_chords(element, nodes, max_edges=1000):
+    """
+    Given a Graph element computes the locations of each node on a
+    circle and the chords connecting them. The amount of radial angle
+    devoted to each node and the number of chords are scaled by the
+    value dimension of the Chord element. If the values are integers
+    then the number of chords is directly scaled by the value, if the
+    values are floats then the number of chords are apportioned such
+    that the lowest value edge is given one chord and all other nodes
+    are scaled according to that. The max_edges parameter scales the
+    number of edges up to a maximum of 1000 edges.
+    """
+    if nodes:
+        nodes = nodes.dimension_values(nodes.kdims[-1], expanded=False)
+    else:
+        source = element.dimension_values(0, expanded=False)
+        target = element.dimension_values(1, expanded=False)
+        nodes = np.unique(np.concatenate([source, target]))
 
     src, tgt = (element.dimension_values(i) for i in range(2))
     src_idx = search_indices(src, nodes)
     tgt_idx = search_indices(tgt, nodes)
     if element.vdims:
         values = element.dimension_values(2)
+        if values.dtype.kind == 'f':
+            values = np.ceil(values*(1./values.min())).astype('int64')
+        if values.sum() > max_edges:
+            values = np.ceil((values / float(values.sum()))*max_edges).astype('int64')
     else:
         values = np.ones(len(element))
 
     matrix = np.zeros((len(nodes), len(nodes)))
     for s, t, v in zip(src_idx, tgt_idx, values):
-        matrix[s, t] = v
+        matrix[s, t] += v
 
     weights_of_areas = (matrix.sum(axis=0) + matrix.sum(axis=1)) - matrix.diagonal()
     areas_in_radians = (weights_of_areas / weights_of_areas.sum()) * (2 * np.pi)
@@ -146,8 +193,7 @@ def compute_chords(element):
     ys = np.sin(points)
 
     # Compute mid-points
-    midpoints = np.convolve(points, [0.5, 0.5],
-                            mode='valid')
+    midpoints = np.convolve(points, [0.5, 0.5], mode='valid')
     mxs = np.cos(midpoints)
     mys = np.sin(midpoints)
 
@@ -172,7 +218,7 @@ def compute_chords(element):
             subpaths.append(b)
             subpaths.append(empty)
         if subpaths:
-            paths.append(np.concatenate(subpaths))
+            paths.append(np.concatenate(subpaths[:-1]))
 
     return (mxs, mys, nodes), paths
 
@@ -260,21 +306,35 @@ class Graph(Dataset, Element2D):
         self._edgepaths = edgepaths
         super(Graph, self).__init__(edges, kdims=kdims, vdims=vdims, **params)
         if self._nodes is None and node_info:
-            nodes = self.nodes.clone(datatype=['pandas', 'dictionary'])
-            if pd is None:
-                for d in node_info.dimensions('value'):
-                    nodes = nodes.add_dimension(d, len(nodes.vdims),
-                                                node_info.dimension_values(d),
-                                                vdim=True)
-            else:
-                node_info_df = node_info.dframe()
-                node_df = nodes.dframe()
-                idx = node_info.kdims[0].name
-                node_df = pd.merge(node_df, node_info_df, left_on='index', right_on=idx)
-                nodes = nodes.clone(node_df, vdims=node_info.vdims)
-            self._nodes = nodes
+            self._add_node_info(node_info)
         self._validate()
         self.redim = redim_graph(self, mode='dataset')
+
+
+    def _add_node_info(self, node_info):
+        nodes = self.nodes.clone(datatype=['pandas', 'dictionary'])
+        if pd is None:
+            for d in node_info.dimensions('value'):
+                nodes = nodes.add_dimension(d, len(nodes.vdims),
+                                            node_info.dimension_values(d),
+                                            vdim=True)
+        else:
+            node_info_df = node_info.dframe()
+            node_df = nodes.dframe()
+            if node_info.kdims:
+                idx = node_info.kdims[-1]
+            else:
+                idx = Dimension('index')
+                node_info_df = node_info_df.reset_index()
+            left_on = 'index'
+            if 'index' in node_info_df.columns and not idx.name == 'index':
+                node_df = node_df.rename(columns={'index': '__index'})
+                left_on = '__index'
+            cols = [c for c in node_info_df.columns if c not in node_df.columns or c == 'index']
+            node_info_df = node_info_df[cols]
+            node_df = pd.merge(node_df, node_info_df, left_on=left_on, right_on=idx.name)
+            nodes = nodes.clone(node_df, kdims=nodes.kdims[:2]+[idx], vdims=node_info.vdims)
+        self._nodes = nodes
 
 
     def _validate(self):
@@ -505,39 +565,25 @@ class Chord(Graph):
 
     def __init__(self, data, kdims=None, vdims=None, **params):
         if isinstance(data, tuple):
-            data = data + (None,)* (2-len(data))
-            edges, nodes = data
+            data = data + (None,)* (3-len(data))
+            edges, nodes, edgepaths = data
         else:
-            edges, nodes = data, None
+            edges, nodes, edgepaths = data, None, None
         if nodes is not None:
-            node_info = None
-            if isinstance(nodes, Nodes):
-                pass
-            elif not isinstance(nodes, Dataset) or nodes.ndims == 3:
-                nodes = Nodes(nodes)
-            else:
-                node_info = nodes
-                nodes = None
-        else:
-            node_info = None
+            if not isinstance(nodes, Dataset):
+                if nodes.ndims == 3:
+                    nodes = Nodes(nodes)
+                else:
+                    nodes = Dataset(nodes)
+                    nodes = nodes.clone(kdims=nodes.kdims[0],
+                                        vdims=nodes.kdims[1:])
+        node_info = nodes
         super(Graph, self).__init__(edges, kdims=kdims, vdims=vdims, **params)
-        nodes, edgepaths = compute_chords(self)
+        nodes, edgepaths = compute_chords(self, node_info)
         self._nodes = Nodes(nodes)
         self._edgepaths = EdgePaths(edgepaths)
         if node_info:
-            nodes = self.nodes.clone(datatype=['pandas', 'dictionary'])
-            if pd is None:
-                for d in node_info.dimensions('value'):
-                    nodes = nodes.add_dimension(d, len(nodes.vdims),
-                                                node_info.dimension_values(d),
-                                                vdim=True)
-            else:
-                node_info_df = node_info.dframe()
-                node_df = nodes.dframe()
-                idx = node_info.kdims[0].name
-                node_df = pd.merge(node_df, node_info_df, left_on='index', right_on=idx)
-                nodes = nodes.clone(node_df, vdims=node_info.vdims)
-            self._nodes = nodes
+            self._add_node_info(node_info)
         self._validate()
         self.redim = redim_graph(self, mode='dataset')
 
