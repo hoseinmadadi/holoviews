@@ -116,6 +116,27 @@ def mpl_to_bokeh(properties):
     return new_properties
 
 
+def process_cmap(cmap, ncolors=None):
+    """
+    Convert valid colormap specifications to a list of colors.
+    """
+    if isinstance(cmap, list):
+        palette = cmap
+    else:
+        try:
+            # Process as matplotlib colormap
+            palette = mplcmap_to_palette(cmap, ncolors)
+        except ValueError:
+            # Process as bokeh palette
+            palette = getattr(palettes, cmap, None)
+            if isinstance(palette, dict):
+                if ncolors in palette:
+                    palette = palette[ncolors]
+                else:
+                    palette = sorted(palette.items())[-1][1]
+    return palette
+
+
 def layout_padding(plots, renderer):
     """
     Pads Nones in a list of lists of plots with empty plots.

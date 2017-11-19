@@ -20,14 +20,15 @@ except ImportError:
 from bokeh.plotting.helpers import _known_tools as known_tools
 
 from ...core import DynamicMap, CompositeOverlay, Element, Dimension
-from ...core.options import abbreviated_exception, SkipRendering
+from ...core.options import abbreviated_exception, SkipRendering, Cycle
 from ...core import util
 from ...streams import Stream, Buffer
 from ..plot import GenericElementPlot, GenericOverlayPlot
 from ..util import dynamic_update
 from .plot import BokehPlot, TOOLS
-from .util import (mpl_to_bokeh, get_tab_title, mplcmap_to_palette,
-                   py2js_tickformatter, rgba_tuple, recursive_model_update)
+from .util import (mpl_to_bokeh, get_tab_title, process_cmap,
+                   py2js_tickformatter, rgba_tuple, recursive_model_update,
+                   rgb2hex)
 
 property_prefixes = ['selection', 'nonselection', 'muted', 'hover']
 
@@ -1090,14 +1091,15 @@ class ColorbarPlot(ElementPlot):
         self.handles['colorbar'] = color_bar
 
 
-    def _get_colormapper(self, dim, element, ranges, style, factors=None, colors=None):
+    def _get_colormapper(self, dim, element, ranges, style, factors=None, colors=None,
+                         name='color_mapper'):
         # The initial colormapper instance is cached the first time
         # and then only updated
-        if dim is None:
+        if dim is None and colors is None:
             return None
         if self.adjoined:
             cmappers = self.adjoined.traverse(lambda x: (x.handles.get('color_dim'),
-                                                         x.handles.get('color_mapper')))
+                                                         x.handles.get(name)))
             cmappers = [cmap for cdim, cmap in cmappers if cdim == dim]
             if cmappers:
                 cmapper = cmappers[0]
@@ -1107,30 +1109,22 @@ class ColorbarPlot(ElementPlot):
                 return None
 
         ncolors = None if factors is None else len(factors)
-        low, high = ranges.get(dim.name, element.range(dim.name))
+        if dim:
+            low, high = ranges.get(dim.name, element.range(dim.name))
+        else:
+            low, high = None, None
+
         if colors:
             palette = colors
         else:
             cmap = style.pop('cmap', 'viridis')
-            if isinstance(cmap, list):
-                palette = cmap
-            else:
-                try:
-                    # Process as matplotlib colormap
-                    palette = mplcmap_to_palette(cmap, ncolors)
-                except ValueError:
-                    # Process as bokeh palette
-                    palette = getattr(palettes, cmap, None)
-                    if isinstance(palette, dict):
-                        if ncolors in palette:
-                            palette = palette[ncolors]
-                        else:
-                            palette = sorted(palette.items())[-1][1]
+            palette = process_cmap(cmap, ncolors)
+
         nan_colors = {k: rgba_tuple(v) for k, v in self.clipping_colors.items()}
         colormapper, opts = self._get_cmapper_opts(low, high, factors, nan_colors)
 
-        if 'color_mapper' in self.handles and isinstance(self.handles['color_mapper'], colormapper):
-            cmapper = self.handles['color_mapper']
+        cmapper = self.handles.get(name)
+        if cmapper is not None:
             if cmapper.palette != palette:
                 cmapper.palette = palette
             opts = {k: opt for k, opt in opts.items()
@@ -1139,27 +1133,36 @@ class ColorbarPlot(ElementPlot):
                 cmapper.update(**opts)
         else:
             cmapper = colormapper(palette=palette, **opts)
-            self.handles['color_mapper'] = cmapper
+            self.handles[name] = cmapper
             self.handles['color_dim'] = dim
         return cmapper
 
 
-    def _get_color_data(self, element, ranges, style, name='color', factors=None, colors=None):
+    def _get_color_data(self, element, ranges, style, name='color', factors=None, colors=None,
+                        cycle=None, integers=False):
         data, mapping = {}, {}
         cdim = element.get_dimension(self.color_index)
         if not cdim:
             return data, mapping
 
         cdata = element.dimension_values(cdim)
-        if factors is None and (isinstance(cdata, list) or cdata.dtype.kind in 'OSU'):
-            factors = list(np.unique(cdata))
+        field = util.dimension_sanitizer(cdim.name)
+        dtypes = 'iOSU' if integers else 'OSU'
+        if factors is None and (isinstance(cdata, list) or cdata.dtype.kind in dtypes):
+            factors = list(util.unique_array(cdata))
+        if factors and integers and cdata.dtype.kind == 'i':
+            field += '_str'
+            cdata = [str(f) for f in cdata]
+            factors = [str(f) for f in factors]
+
+        if colors is None and factors is not None and isinstance(cycle, Cycle):
+            colors = [rgb2hex(cycle.values[i%len(cycle)]) for i in range(len(factors))]
         mapper = self._get_colormapper(cdim, element, ranges, style,
                                        factors, colors)
-        data[cdim.name] = cdata
+        data[field] = cdata
         if factors is not None:
-            mapping['legend'] = {'field': cdim.name}
-        mapping[name] = {'field': cdim.name,
-                         'transform': mapper}
+            mapping['legend'] = {'field': field}
+        mapping[name] = {'field': field, 'transform': mapper}
         return data, mapping
 
 
