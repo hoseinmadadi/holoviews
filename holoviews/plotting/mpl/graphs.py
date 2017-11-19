@@ -41,8 +41,8 @@ class GraphPlot(ColorbarPlot):
                 factors = unique_array(cs)
                 cs = search_indices(cs, factors)
                 if isinstance(color, Cycle):
-                    style['node_facecolors'] = [rgb2hex(color.values[v%len(color)])
-                                                for v in cs]
+                    colors = [color.values[v%len(color)] for v in cs]
+                    style['node_facecolors'] = colors
                     style.pop('node_color', None)
                 else:
                     style['c'] = cs
@@ -62,16 +62,18 @@ class GraphPlot(ColorbarPlot):
         cvals = element.dimension_values(edge_cdim)
         if idx in [0, 1]:
             factors = element.nodes.dimension_values(2, expanded=False)
+        elif idx == 2 and cvals.dtype.kind in 'if':
+            factors = None
         else:
             factors = unique_array(cvals)
-        if factors.dtype.kind == 'f':
+        if factors is None or factors.dtype.kind == 'f':
             style['edge_array'] = cvals
         else:
             cvals = search_indices(cvals, factors)
             if isinstance(cycle, Cycle):
                 factors = list(factors)
-                style['edge_colors'] = [rgb2hex(cycle.values[v%len(cycle)])
-                                        for v in cvals]
+                colors = [cycle.values[v%len(cycle)] for v in cvals]
+                style['edge_colors'] = colors
                 style.pop('edge_color', None)
             else:
                 style['edge_array'] = cvals

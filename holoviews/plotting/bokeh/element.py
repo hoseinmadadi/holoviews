@@ -1092,7 +1092,7 @@ class ColorbarPlot(ElementPlot):
 
 
     def _get_colormapper(self, dim, element, ranges, style, factors=None, colors=None,
-                         name='color_mapper'):
+                         cycle=None, name='color_mapper'):
         # The initial colormapper instance is cached the first time
         # and then only updated
         if dim is None and colors is None:
@@ -1114,12 +1114,8 @@ class ColorbarPlot(ElementPlot):
         else:
             low, high = None, None
 
-        if colors:
-            palette = colors
-        else:
-            cmap = style.pop('cmap', 'viridis')
-            palette = process_cmap(cmap, ncolors)
-
+        cmap = colors or style.pop('cmap', 'viridis')
+        palette = process_cmap(cmap, ncolors, cycle)
         nan_colors = {k: rgba_tuple(v) for k, v in self.clipping_colors.items()}
         colormapper, opts = self._get_cmapper_opts(low, high, factors, nan_colors)
 
@@ -1155,10 +1151,8 @@ class ColorbarPlot(ElementPlot):
             cdata = [str(f) for f in cdata]
             factors = [str(f) for f in factors]
 
-        if colors is None and factors is not None and isinstance(cycle, Cycle):
-            colors = [rgb2hex(cycle.values[i%len(cycle)]) for i in range(len(factors))]
         mapper = self._get_colormapper(cdim, element, ranges, style,
-                                       factors, colors)
+                                       factors, colors, cycle)
         data[field] = cdata
         if factors is not None:
             mapping['legend'] = {'field': field}

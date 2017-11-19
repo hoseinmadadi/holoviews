@@ -29,7 +29,7 @@ try:
 except:
     Chart = type(None) # Create stub for isinstance check
 
-from ...core.options import abbreviated_exception
+from ...core.options import abbreviated_exception, Cycle
 from ...core.overlay import Overlay
 from ...core.util import basestring, unique_array, callable_name, pd, dt64_to_dt
 from ...core.spaces import get_nested_dmaps, DynamicMap
@@ -116,11 +116,14 @@ def mpl_to_bokeh(properties):
     return new_properties
 
 
-def process_cmap(cmap, ncolors=None):
+def process_cmap(cmap, ncolors=None, cycle=None):
     """
     Convert valid colormap specifications to a list of colors.
     """
-    if isinstance(cmap, list):
+    if isinstance(cycle, Cycle):
+        colors = [cycle.values[i%len(cycle)] for i in range(ncolors)]
+        palette = [rgb2hex(c) if isinstance(c, tuple) else c for c in colors]
+    elif isinstance(cmap, list):
         palette = cmap
     else:
         try:

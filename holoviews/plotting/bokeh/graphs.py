@@ -91,31 +91,31 @@ class GraphPlot(CompositeElementPlot, ColorbarPlot, LegendPlot):
         cvals = element.dimension_values(cdim)
         if idx in [0, 1]:
             factors = element.nodes.dimension_values(2, expanded=False)
+        elif idx == 2 and cvals.dtype.kind in 'if':
+            factors = None
         else:
             factors = unique_array(cvals)
 
         colors, cmap = None, style.get('edge_cmap', style.get('cmap'))
-        if factors.dtype.kind != 'f':
+        if factors is None or factors.dtype.kind == 'f':
+            factors = None
+        else:
             if factors.dtype.kind == 'i':
                 field += '_str'
                 cvals = [str(f) for f in cvals]
                 factors = (str(f) for f in factors)
             factors = list(factors)
-            if isinstance(cycle, Cycle):
-                colors = [rgb2hex(cycle.values[i%len(cycle)]) for i in range(len(factors))]
-            else:
-                colors = process_cmap(cmap, len(factors))
-        else:
-            factors = None
+            colors = process_cmap(cmap, len(factors), cycle)
 
         if field not in edge_data:
             edge_data[field] = cvals
         edge_style = dict(style, cmap=cmap)
         mapper = self._get_colormapper(cdim, element, ranges, edge_style,
                                        factors, colors, 'edge_colormapper')
-        edge_mapping['edge_line_color'] = {'field': field, 'transform': mapper}
-        edge_mapping['edge_nonselection_line_color'] = {'field': field, 'transform': mapper}
-        edge_mapping['edge_selection_line_color'] = {'field': field, 'transform': mapper}
+        transform = {'field': field, 'transform': mapper}
+        edge_mapping['edge_line_color'] = transform
+        edge_mapping['edge_nonselection_line_color'] = transform
+        edge_mapping['edge_selection_line_color'] = transform
 
 
     def get_data(self, element, ranges, style):

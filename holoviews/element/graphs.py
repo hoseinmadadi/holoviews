@@ -169,12 +169,16 @@ def compute_chords(element, nodes, max_edges=1000):
     tgt_idx = search_indices(tgt, nodes)
     if element.vdims:
         values = element.dimension_values(2)
-        if values.dtype.kind == 'f':
-            values = np.ceil(values*(1./values.min())).astype('int64')
-        if values.sum() > max_edges:
-            values = np.ceil((values / float(values.sum()))*max_edges).astype('int64')
+        if values.dtype.kind not in 'if':
+            values = np.ones(len(element), dtype='int')
+        else:
+            if values.dtype.kind == 'f':
+                values = np.ceil(values*(1./values.min()))
+            if values.sum() > max_edges:
+                values = np.ceil((values / float(values.sum()))*max_edges)
+            values = values.astype('int64')
     else:
-        values = np.ones(len(element))
+        values = np.ones(len(element), dtype='int')
 
     matrix = np.zeros((len(nodes), len(nodes)))
     for s, t, v in zip(src_idx, tgt_idx, values):
